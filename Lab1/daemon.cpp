@@ -15,11 +15,12 @@
 #include <grp.h>
 #include <fcntl.h>
 #include <limits.h>
+#include <memory>
 
 // Singleton Daemon class
 class Daemon {
 private:
-    static Daemon* instance;
+    static std::unique_ptr<Daemon> instance;
     std::string configPath;
     std::string dir1;
     std::string dir2;
@@ -158,7 +159,7 @@ public:
         if (!instance) {
             instance = new Daemon();
         }
-        return instance;
+        return instance.get();
     }
 
     void start(const std::string& config) {
@@ -190,7 +191,7 @@ public:
     }
 };
 
-Daemon* Daemon::instance = nullptr;
+std::unique_ptr<Daemon> Daemon::instance = nullptr;
 
 int main(int argc, char* argv[]) {
     if (argc != 2) {
