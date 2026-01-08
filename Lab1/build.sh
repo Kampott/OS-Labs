@@ -1,9 +1,6 @@
-﻿#!/bin/bash
+﻿#create
+g++ -Wall -Werror -o mydaemon main.cpp Daemon.cpp -std=c++14
 
-# g++ compiler
-g++ -Wall -Werror -o mydaemon daemon.cpp
-
-# cleanup
 rm -f *.o
 
 echo "Build complete. Executable: mydaemon"
