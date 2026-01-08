@@ -24,20 +24,9 @@ std::atomic<bool> running(true);
 std::atomic<bool> graceful_shutdown{false};
 time_t last_message_time;
 
-#if defined(TYPE_MMAP) || defined(TYPE_SHM)
-Shared* shared = nullptr;
-#else
-SemShared* semshared = nullptr;
-#endif
-
 void sigchld_handler(int sig) {
     running.store(false);
     graceful_shutdown.store(true); 
-#if defined(TYPE_PIPE)
-    sem_post(&semshared->sem_c2h);
-#else
-    sem_post(&shared->sem_c2h);
-#endif
 }
 
 void display(const Message& msg) {
@@ -54,7 +43,6 @@ void monitor_inactivity() {
             std::cerr << "Client inactive, sending SIGKILL" << std::endl;
             kill(client_pid, SIGKILL);
             running.store(false);
-            // No need for sem_post here, sigchld_handler will handle
             break;
         }
     }
@@ -108,59 +96,8 @@ void input_thread() {
 }
 
 int main() {
-#if defined(TYPE_MMAP) || defined(TYPE_SHM)
-    void* shm_ptr = nullptr;
-    const size_t shared_size = sizeof(Shared);
-#if defined(TYPE_SHM)
-    int fd;
-    const char* shm_name = "/lab_shm";
-#endif
-#endif
-#if defined(TYPE_PIPE)
-    int pipe_h2c[2];
-    int pipe_c2h[2];
-    void* sem_ptr = nullptr;
-    const size_t sem_size = sizeof(SemShared);
-#endif
+    Conn::pre_fork_init();
 
-#if defined(TYPE_MMAP)
-    shm_ptr = mmap(nullptr, shared_size, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
-    if (shm_ptr == MAP_FAILED) {
-        perror("mmap");
-        return 1;
-    }
-    shared = static_cast<Shared*>(shm_ptr);
-#elif defined(TYPE_SHM)
-    fd = shm_open(shm_name, O_CREAT | O_RDWR, 0666);
-    if (fd == -1) {
-        perror("shm_open");
-        return 1;
-    }
-    if (ftruncate(fd, shared_size) == -1) {
-        perror("ftruncate");
-        return 1;
-    }
-    shm_ptr = mmap(nullptr, shared_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
-    if (shm_ptr == MAP_FAILED) {
-        perror("mmap");
-        return 1;
-    }
-    close(fd);
-    shared = static_cast<Shared*>(shm_ptr);
-#elif defined(TYPE_PIPE)
-    if (pipe(pipe_h2c) == -1 || pipe(pipe_c2h) == -1) {
-        perror("pipe");
-        return 1;
-    }
-    sem_ptr = mmap(nullptr, sem_size, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
-    if (sem_ptr == MAP_FAILED) {
-        perror("mmap sem");
-        return 1;
-    }
-    semshared = static_cast<SemShared*>(sem_ptr);
-#endif
-
-    // sigchild before forks
     struct sigaction sa;
     sa.sa_handler = sigchld_handler;
     sigemptyset(&sa.sa_mask);
@@ -181,53 +118,7 @@ int main() {
         std::cerr << "Client PID: " << client_pid << std::endl;
     }
 
-#if defined(TYPE_PIPE)
-    if (is_host) {
-        close(pipe_h2c[0]);
-        close(pipe_c2h[1]);
-    } else {
-        close(pipe_h2c[1]);
-        close(pipe_c2h[0]);
-    }
-#elif defined(TYPE_SHM)
-    if (!is_host) {
-        int fd = shm_open(shm_name, O_RDWR, 0);
-        if (fd == -1) {
-            perror("shm_open client");
-            return 1;
-        }
-        shm_ptr = mmap(nullptr, shared_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
-        if (shm_ptr == MAP_FAILED) {
-            perror("mmap client");
-            return 1;
-        }
-        close(fd);
-        shared = static_cast<Shared*>(shm_ptr);
-    }
-#endif
-
-#if defined(TYPE_PIPE)
-    conn = new Conn(is_host, pipe_h2c, pipe_c2h, semshared);
-#else
-    conn = new Conn(is_host, shared);
-#endif
-
-#if !defined(TYPE_PIPE)
-    if (is_host) {
-        pthread_mutexattr_t attr;
-        pthread_mutexattr_init(&attr);
-        pthread_mutexattr_setpshared(&attr, PTHREAD_PROCESS_SHARED);
-        pthread_mutex_init(&shared->mutex, &attr);
-        sem_init(&shared->sem_h2c, 1, 0);
-        sem_init(&shared->sem_c2h, 1, 0);
-        pthread_mutexattr_destroy(&attr);
-    }
-#else
-    if (is_host) {
-        sem_init(&semshared->sem_h2c, 1, 0);
-        sem_init(&semshared->sem_c2h, 1, 0);
-    }
-#endif
+    conn = new Conn(is_host);
 
     std::thread input_th(input_thread);
     std::thread monitor_th;
@@ -282,22 +173,6 @@ int main() {
 
     if (is_host) {
         wait(nullptr);
-#if defined(TYPE_SHM)
-        shm_unlink(shm_name);
-#endif
-#if defined(TYPE_MMAP) || defined(TYPE_SHM)
-        munmap(shm_ptr, shared_size);
-#endif
-#if defined(TYPE_PIPE)
-        munmap(sem_ptr, sem_size);
-#endif
-    } else {
-#if defined(TYPE_MMAP) || defined(TYPE_SHM)
-        munmap(shm_ptr, shared_size);
-#endif
-#if defined(TYPE_PIPE)
-        munmap(sem_ptr, sem_size);
-#endif
     }
 
     return 0;

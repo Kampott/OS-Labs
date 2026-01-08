@@ -32,24 +32,28 @@ extern std::atomic<bool> running;
 
 class Conn {
 public:
-#ifdef TYPE_PIPE
-    Conn(bool ih, int h2c[2], int c2h[2], SemShared* ss);
-#else
-    Conn(bool ih, Shared* sh);
-#endif
+    Conn(bool is_host);
     ~Conn();
     bool Read(void* buf, size_t count);
     bool Write(const void* buf, size_t count);
-#ifdef TYPE_PIPE
-    static bool is_host;
-    static int read_fd;
-    static int write_fd;
-    sem_t *sem_read;
-    sem_t *sem_write;
-#else
+    static void pre_fork_init();
+
 private:
-    bool is_host;
-    Shared* shared;
+#ifdef TYPE_PIPE
+    bool is_host_;
+    int read_fd_;
+    int write_fd_;
+    sem_t *sem_read_;
+    sem_t *sem_write_;
+    static int pipe_h2c[2];
+    static int pipe_c2h[2];
+    static void* sem_ptr;
+#else
+    bool is_host_;
+    Shared* shared_;
+#if defined(TYPE_MMAP) || defined(TYPE_SHM)
+    static void* shared_ptr;
+#endif
 #endif
 };
 
